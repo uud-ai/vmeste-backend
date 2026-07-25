@@ -1,0 +1,23 @@
+# Render Blueprint -- создаёт веб-сервис одним шагом:
+# Render Dashboard -> New -> Blueprint -> указать репозиторий -> Apply
+#
+# DATABASE_URL нужно будет вписать вручную в дашборде после создания сервиса --
+# это строка подключения к вашему бесплатному проекту Supabase (или другому
+# Postgres). См. DEPLOY.md.
+
+services:
+  - type: web
+    name: vmeste-backend
+    runtime: node
+    region: frankfurt # ближайший к RU регион Render; можно сменить в дашборде
+    plan: free
+    buildCommand: npm install
+    startCommand: npm start
+    healthCheckPath: /api/health
+    envVars:
+      - key: JWT_SECRET
+        generateValue: true # Render сам сгенерирует случайный секрет
+      - key: CORS_ORIGIN
+        value: "*" # сузьте до домена фронтенда, когда он появится
+      - key: DATABASE_URL
+        sync: false # впишите вручную в дашборде -- строка подключения к Supabase
