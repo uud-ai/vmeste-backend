@@ -1,0 +1,105 @@
+import { Router } from "express";
+import bcrypt from "bcryptjs";
+import { queryOne, execute } from "../db/connection.js";
+import { signToken } from "../utils/jwt.js";
+import { asyncHandler } from "../utils/asyncHandler.js";
+import { requireAuth } from "../middleware/auth.js";
+
+const router = Router();
+
+// Создаёт новую семью и родительский аккаунт (первый пользователь семьи всегда родитель).
+router.post(
+  "/register",
+  asyncHandler(async (req, res) => {
+    const { familyName, parentName, email, password } = req.body;
+    if (!parentName || !email || !password) {
+      return res.status(400).json({ error: "Заполните имя, email и пароль" });
+    }
+    if (password.length < 8) {
+      return res.status(400).json({ error: "Пароль должен быть не короче 8 символов" });
+    }
+    const existing = await queryOne("SELECT id FROM users WHERE email = $1", [email]);
+    if (existing) return res.status(409).json({ error: "Этот email уже зарегистрирован" });
+
+    const family = await queryOne("INSERT INTO families (name) VALUES ($1) RETURNING id", [
+      familyName || "Моя семья",
+    ]);
+    const familyId = family.id;
+
+    const passwordHash = await bcrypt.hash(password, 10);
+    const user = await queryOne(
+      "INSERT INTO users (family_id, role, name, email, password_hash) VALUES ($1,$2,$3,$4,$5) RETURNING id",
+      [familyId, "parent", parentName, email, passwordHash]
+    );
+    const userId = user.id;
+
+    await execute("INSERT INTO settings (family_id) VALUES ($1)", [familyId]);
+    await execute("INSERT INTO locations (family_id) VALUES ($1)", [familyId]);
+
+    const token = signToken({ id: userId, familyId, role: "parent" });
+    res.status(201).json({ token, user: { id: userId, familyId, role: "parent", name: parentName, email } });
+  })
+);
+
+// Только родитель может добавить ребёнка в свою семью.
+router.post(
+  "/register-child",
+  requireAuth,
+  asyncHandler(async (req, res) => {
+    if (req.user.role !== "parent") {
+      return res.status(403).json({ error: "Только родитель может добавить ребёнка" });
+    }
+    const { name, email, password } = req.body;
+    if (!name || !email || !password) {
+      return res.status(400).json({ error: "Заполните имя, email и пароль" });
+    }
+    const existing = await queryOne("SELECT id FROM users WHERE email = $1", [email]);
+    if (existing) return res.status(409).json({ error: "Этот email уже зарегистрирован" });
+
+    const passwordHash = await bcrypt.hash(password, 10);
+    const user = await queryOne(
+      "INSERT INTO users (family_id, role, name, email, password_hash) VALUES ($1,$2,$3,$4,$5) RETURNING id",
+      [req.user.familyId, "child", name, email, passwordHash]
+    );
+    const userId = user.id;
+
+    const token = signToken({ id: userId, familyId: req.user.familyId, role: "child" });
+    res.status(201).json({ token, user: { id: userId, familyId: req.user.familyId, role: "child", name, email } });
+  })
+);
+
+router.post(
+  "/login",
+  asyncHandler(async (req, res) => {
+    const { email, password } = req.body;
+    if (!email || !password) return res.status(400).json({ error: "Заполните email и пароль" });
+
+    const user = await queryOne("SELECT * FROM users WHERE email = $1", [email]);
+    if (!user) return res.status(401).json({ error: "Неверный email или пароль" });
+
+    const ok = await bcrypt.compare(password, user.password_hash);
+    if (!ok) return res.status(401).json({ error: "Неверный email или пароль" });
+
+    const token = signToken({ id: user.id, familyId: user.family_id, role: user.role });
+    res.json({
+      token,
+      user: { id: user.id, familyId: user.family_id, role: user.role, name: user.name, email: user.email },
+    });
+  })
+);
+
+router.get(
+  "/me",
+  requireAuth,
+  asyncHandler(async (req, res) => {
+    // Алиас familyId в кавычках обязателен: Postgres по умолчанию приводит
+    // некавыченные идентификаторы к нижнему регистру (было бы "familyid").
+    const user = await queryOne(
+      'SELECT id, family_id as "familyId", role, name, email FROM users WHERE id = $1',
+      [req.user.id]
+    );
+    res.json({ user });
+  })
+);
+
+export default router;
