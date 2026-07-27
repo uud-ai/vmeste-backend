@@ -53,6 +53,9 @@ router.post(
     if (!name || !email || !password) {
       return res.status(400).json({ error: "Заполните имя, email и пароль" });
     }
+    if (password.length < 8) {
+      return res.status(400).json({ error: "Пароль должен быть не короче 8 символов" });
+    }
     const existing = await queryOne("SELECT id FROM users WHERE email = $1", [email]);
     if (existing) return res.status(409).json({ error: "Этот email уже зарегистрирован" });
 
