@@ -16,6 +16,36 @@ router.get(
   })
 );
 
+// Родитель создаёт новый квест — сразу появляется в статусе "available"
+// в дашборде ребёнка.
+router.post(
+  "/",
+  requireAuth,
+  requireRole("parent"),
+  asyncHandler(async (req, res) => {
+    const { title, description, rewardMinutes } = req.body;
+
+    if (typeof title !== "string" || title.trim().length < 2 || title.trim().length > 120) {
+      return res.status(400).json({ error: "Название квеста должно быть от 2 до 120 символов" });
+    }
+    if (!Number.isInteger(rewardMinutes) || rewardMinutes < 1 || rewardMinutes > 300) {
+      return res.status(400).json({ error: "Награда должна быть целым числом минут от 1 до 300" });
+    }
+    if (description !== undefined && description !== null && typeof description !== "string") {
+      return res.status(400).json({ error: "Описание должно быть текстом" });
+    }
+
+    const quest = await queryOne(
+      `INSERT INTO quests (family_id, title, description, reward_minutes)
+       VALUES ($1, $2, $3, $4)
+       RETURNING *`,
+      [req.user.familyId, title.trim(), description?.trim() || null, rewardMinutes]
+    );
+
+    res.status(201).json({ quest });
+  })
+);
+
 // Ребёнок отправляет квест на проверку: квест уходит в pending_review и одновременно
 // создаётся запись в requests, которую увидит родитель в Центре запросов.
 router.post(
