@@ -41,6 +41,39 @@ router.put(
   })
 );
 
+// Родитель добавляет новый блок расписания — создаётся сразу активным
+// и в конец списка (следующий по счёту sort_order).
+router.post(
+  "/schedule",
+  requireAuth,
+  requireRole("parent"),
+  asyncHandler(async (req, res) => {
+    const { label, blockType, startTime, endTime } = req.body;
+    const validTypes = ["study", "sleep", "other"];
+    const timePattern = /^([01]\d|2[0-3]):[0-5]\d$/;
+
+    if (typeof label !== "string" || label.trim().length < 2 || label.trim().length > 60) {
+      return res.status(400).json({ error: "Название блока должно быть от 2 до 60 символов" });
+    }
+    if (!validTypes.includes(blockType)) {
+      return res.status(400).json({ error: "Тип блока должен быть study, sleep или other" });
+    }
+    if (!timePattern.test(startTime) || !timePattern.test(endTime)) {
+      return res.status(400).json({ error: "Время должно быть в формате ЧЧ:ММ" });
+    }
+
+    const block = await queryOne(
+      `INSERT INTO schedule_blocks (family_id, label, block_type, start_time, end_time, active, sort_order)
+       VALUES ($1, $2, $3, $4, $5, 1,
+         COALESCE((SELECT MAX(sort_order) FROM schedule_blocks WHERE family_id = $1), 0) + 1)
+       RETURNING *`,
+      [req.user.familyId, label.trim(), blockType, startTime, endTime]
+    );
+
+    res.status(201).json({ block });
+  })
+);
+
 router.put(
   "/schedule/:id",
   requireAuth,
