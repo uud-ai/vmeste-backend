@@ -5,6 +5,7 @@ import { queryOne, execute } from "../db/connection.js";
 import { signToken } from "../utils/jwt.js";
 import { asyncHandler } from "../utils/asyncHandler.js";
 import { requireAuth } from "../middleware/auth.js";
+import { sendEmail } from "../utils/email.js";
 
 const router = Router();
 
@@ -48,6 +49,21 @@ router.post(
 
     await execute("INSERT INTO settings (family_id) VALUES ($1)", [familyId]);
     await execute("INSERT INTO locations (family_id) VALUES ($1)", [familyId]);
+
+    await sendEmail({
+      to: email,
+      subject: "Добро пожаловать в «Вместе»",
+      html: `
+        <div style="font-family: sans-serif; max-width: 480px; margin: 0 auto; color: #2b2b28;">
+          <h2>Здравствуйте, ${parentName}!</h2>
+          <p>Вы зарегистрировали семью «${familyName || "Моя семья"}» в приложении «Вместе».</p>
+          <p>Загляните в дашборд — там можно добавить ребёнка, настроить расписание и первые квесты.</p>
+          <p style="color: #8a8a82; font-size: 13px; margin-top: 24px;">
+            Если вы не регистрировались в «Вместе» — просто проигнорируйте это письмо.
+          </p>
+        </div>
+      `,
+    });
 
     const token = signToken({ id: userId, familyId, role: "parent" });
     res.status(201).json({ token, user: { id: userId, familyId, role: "parent", name: parentName, email } });
