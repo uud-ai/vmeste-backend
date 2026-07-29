@@ -9,6 +9,7 @@ import requestsRoutes from "./routes/requests.routes.js";
 import historyRoutes from "./routes/history.routes.js";
 import usageRoutes from "./routes/usage.routes.js";
 import locationRoutes from "./routes/location.routes.js";
+import familyRoutes from "./routes/family.routes.js";
 import { errorHandler } from "./middleware/errorHandler.js";
 
 export function createApp() {
@@ -46,6 +47,7 @@ export function createApp() {
   app.use("/api/history", historyRoutes);
   app.use("/api/usage", usageRoutes);
   app.use("/api/location", locationRoutes);
+  app.use("/api/family", familyRoutes);
 
   app.use((req, res) => res.status(404).json({ error: "Маршрут не найден" }));
   app.use(errorHandler);
