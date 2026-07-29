@@ -1,5 +1,6 @@
 import { Router } from "express";
 import bcrypt from "bcryptjs";
+import rateLimit from "express-rate-limit";
 import { queryOne, execute } from "../db/connection.js";
 import { signToken } from "../utils/jwt.js";
 import { asyncHandler } from "../utils/asyncHandler.js";
@@ -7,9 +8,22 @@ import { requireAuth } from "../middleware/auth.js";
 
 const router = Router();
 
+// Не больше 20 попыток входа с одного IP за 15 минут. 20 — с запасом на то, что
+// вся семья обычно сидит за одним домашним интернетом и может пробовать войти
+// почти одновременно с нескольких устройств; для подбора пароля этого всё равно
+// мало — перебор с такой скоростью займёт годы даже по короткому словарю.
+const loginLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: 20,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: "Слишком много попыток входа. Подождите 15 минут и попробуйте снова." },
+});
+
 // Создаёт новую семью и родительский аккаунт (первый пользователь семьи всегда родитель).
 router.post(
-  "/register",
+  "/login",
+  loginLimiter,
   asyncHandler(async (req, res) => {
     const { familyName, parentName, email, password } = req.body;
     if (!parentName || !email || !password) {
