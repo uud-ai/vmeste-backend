@@ -16,6 +16,11 @@ CREATE TABLE IF NOT EXISTS users (
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+-- Токен восстановления пароля: NULL, пока не запрошен сброс. Одна активная
+-- ссылка на пользователя — новый запрос перезаписывает старый токен.
+ALTER TABLE users ADD COLUMN IF NOT EXISTS reset_token TEXT;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS reset_token_expires TIMESTAMPTZ;
+
 -- Настройки лимита экранного времени. used_minutes/bonus_minutes сбрасываются
 -- раз в сутки (см. src/utils/dayReset.js). used_date остаётся TEXT формата
 -- YYYY-MM-DD (а не DATE) намеренно: JS-код сравнивает его напрямую со строкой
