@@ -1,4 +1,5 @@
 import { Router } from "express";
+import crypto from "node:crypto";
 import bcrypt from "bcryptjs";
 import rateLimit from "express-rate-limit";
 import { queryOne, execute } from "../db/connection.js";
@@ -9,10 +10,9 @@ import { sendEmail } from "../utils/email.js";
 
 const router = Router();
 
-// Не больше 20 попыток входа с одного IP за 15 минут. 20 — с запасом на то, что
-// вся семья обычно сидит за одним домашним интернетом и может пробовать войти
-// почти одновременно с нескольких устройств; для подбора пароля этого всё равно
-// мало — перебор с такой скоростью займёт годы даже по короткому словарю.
+// Адрес фронтенда для ссылки в письме — та же переменная, что уже настроена для CORS.
+const FRONTEND_URL = (process.env.CORS_ORIGIN || "https://app.vmestefamily.site").split(",")[0].trim();
+
 const loginLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   limit: 20,
@@ -21,7 +21,16 @@ const loginLimiter = rateLimit({
   message: { error: "Слишком много попыток входа. Подождите 15 минут и попробуйте снова." },
 });
 
-// Создаёт новую семью и родительский аккаунт (первый пользователь семьи всегда родитель).
+// Отдельный, более строгий лимит на forgot-password — это ещё и отправка
+// письма (не бесплатно и не бесконечно на тарифе Resend), не только защита от подбора.
+const forgotPasswordLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: 5,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: "Слишком много запросов на сброс пароля. Подождите 15 минут." },
+});
+
 router.post(
   "/register",
   asyncHandler(async (req, res) => {
@@ -70,7 +79,6 @@ router.post(
   })
 );
 
-// Только родитель может добавить ребёнка в свою семью.
 router.post(
   "/register-child",
   requireAuth,
@@ -121,12 +129,82 @@ router.post(
   })
 );
 
+// Запрос ссылки для сброса пароля. Ответ намеренно одинаковый независимо от
+// того, зарегистрирован email или нет — иначе через эту форму можно было бы
+// проверять, какие адреса вообще есть в базе.
+router.post(
+  "/forgot-password",
+  forgotPasswordLimiter,
+  asyncHandler(async (req, res) => {
+    const { email } = req.body;
+    if (!email) return res.status(400).json({ error: "Укажите email" });
+
+    const genericMessage = "Если такой email зарегистрирован, на него отправлена ссылка для сброса пароля";
+
+    const user = await queryOne("SELECT id, name FROM users WHERE email = $1", [email]);
+    if (user) {
+      const resetToken = crypto.randomBytes(32).toString("hex");
+      const expires = new Date(Date.now() + 60 * 60 * 1000); // 1 час
+      await execute("UPDATE users SET reset_token = $1, reset_token_expires = $2 WHERE id = $3", [
+        resetToken,
+        expires,
+        user.id,
+      ]);
+
+      const resetUrl = `${FRONTEND_URL}/?resetToken=${resetToken}`;
+      await sendEmail({
+        to: email,
+        subject: "Восстановление пароля в «Вместе»",
+        html: `
+          <div style="font-family: sans-serif; max-width: 480px; margin: 0 auto; color: #2b2b28;">
+            <h2>Здравствуйте, ${user.name}!</h2>
+            <p>Вы (или кто-то другой) запросили сброс пароля для аккаунта в «Вместе».</p>
+            <p><a href="${resetUrl}" style="color: #2563eb; font-weight: bold;">Задать новый пароль</a></p>
+            <p style="color: #8a8a82; font-size: 13px; margin-top: 24px;">
+              Ссылка действует 1 час. Если это были не вы — просто проигнорируйте письмо, пароль не изменится.
+            </p>
+          </div>
+        `,
+      });
+    }
+
+    res.json({ message: genericMessage });
+  })
+);
+
+// Установка нового пароля по токену из письма.
+router.post(
+  "/reset-password",
+  asyncHandler(async (req, res) => {
+    const { token, password } = req.body;
+    if (!token || !password) {
+      return res.status(400).json({ error: "Некорректная ссылка для сброса пароля" });
+    }
+    if (password.length < 8) {
+      return res.status(400).json({ error: "Пароль должен быть не короче 8 символов" });
+    }
+
+    const user = await queryOne("SELECT id FROM users WHERE reset_token = $1 AND reset_token_expires > now()", [
+      token,
+    ]);
+    if (!user) {
+      return res.status(400).json({ error: "Ссылка недействительна или уже устарела — запросите новую" });
+    }
+
+    const passwordHash = await bcrypt.hash(password, 10);
+    await execute(
+      "UPDATE users SET password_hash = $1, reset_token = NULL, reset_token_expires = NULL WHERE id = $2",
+      [passwordHash, user.id]
+    );
+
+    res.json({ ok: true });
+  })
+);
+
 router.get(
   "/me",
   requireAuth,
   asyncHandler(async (req, res) => {
-    // Алиас familyId в кавычках обязателен: Postgres по умолчанию приводит
-    // некавыченные идентификаторы к нижнему регистру (было бы "familyid").
     const user = await queryOne(
       'SELECT id, family_id as "familyId", role, name, email FROM users WHERE id = $1',
       [req.user.id]
